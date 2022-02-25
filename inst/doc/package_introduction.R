@@ -15,6 +15,7 @@ library(haven)
 library(brms)
 library(tidyr)
 library(stringr)
+library(Hmisc)
 
 knitr::opts_chunk$set(
   collapse = TRUE,
@@ -203,6 +204,8 @@ data_pred %>%
 
 
 ## ----check_data,eval=FALSE----------------------------------------------------
+#  
+#  # NOT RUN IN THE VIGNETTE
 #  
 #    single_data <- sim_ordbeta(N=100,iter=1,
 #                               return_data=T)

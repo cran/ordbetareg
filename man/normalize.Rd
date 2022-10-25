@@ -4,11 +4,16 @@
 \alias{normalize}
 \title{Normalize Outcome/Response to \[0,1\] Interval}
 \usage{
-normalize(outcome)
+normalize(outcome, true_bounds = NULL)
 }
 \arguments{
 \item{outcome}{Any non-character vector. Factors will be converted
 to numeric via coercion.}
+
+\item{true_bounds}{Specify this parameter with the lower and upper bound
+if the observed min/max of the outcome should not be used. Useful when
+an upper or lower bound exists but the observed data is less than/more than
+that bound. The normalization function will respect these bounds.}
 }
 \value{
 A numeric vector with an upper bound of 1 and a lower bound of

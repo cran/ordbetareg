@@ -2,7 +2,9 @@
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>",
-  fig.align="center"
+  fig.align="center",
+  fig.width=5,
+  fig.height=3
 )
 options(rmarkdown.html_vignette.check_title = FALSE)
 
@@ -111,9 +113,12 @@ pew %>%
 
 
 
-## ----post_predict-------------------------------------------------------------
+## ----post_predict,message=F---------------------------------------------------
 
-pp_check(ord_fit_mean) + theme_minimal()
+plots <- pp_check_ordbeta(ord_fit_mean,ndraws=100)
+
+plots$discrete
+plots$continuous
 
 
 ## ----coef_plot----------------------------------------------------------------
@@ -122,7 +127,8 @@ library(modelsummary)
 
 modelsummary(ord_fit_mean,statistic = "conf.int",
                           metrics = "RMSE",
-                          coef_map=c("bsp_moeducation"="Education",
+                          coef_map=c("b_Intercept"="Intercept",
+                                     "bsp_moeducation"="Education",
                                      "bsp_moincome"="Income",
                                      "bsp_moeducation:moincome"="EducationXIncome"))
 
@@ -130,8 +136,7 @@ modelsummary(ord_fit_mean,statistic = "conf.int",
 
 library(marginaleffects)
 
-marg_effs <- marginaleffects(ord_fit_mean,
-                             variables="education")
+marg_effs <- marginaleffects(ord_fit_mean)
 
 summary(marg_effs) %>% knitr::kable()
 

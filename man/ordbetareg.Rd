@@ -8,6 +8,7 @@
 ordbetareg(
   formula = NULL,
   data = NULL,
+  true_bounds = NULL,
   phi_reg = FALSE,
   use_brm_multiple = FALSE,
   coef_prior_mean = 0,
@@ -17,7 +18,8 @@ ordbetareg(
   phi_coef_prior_mean = 0,
   phi_coef_prior_sd = 5,
   extra_prior = NULL,
-  inits = "0",
+  init = "0",
+  inits = NULL,
   ...
 )
 }
@@ -28,6 +30,11 @@ etc. \emph{or} formula object as created/called by the \code{brms}
 formula definition.}
 
 \item{data}{An R data frame or tibble containing the variables in the formula}
+
+\item{true_bounds}{If the true bounds of the outcome/response
+don't exist in the data, pass a length 2 numeric vector
+of the minimum and maximum bounds to properly normalize
+the outcome/response}
 
 \item{phi_reg}{T/F. Whether you are including a linear model predicting
 the dispersion  parameter, phi. Defaults to false.}
@@ -49,10 +56,11 @@ logit scale.}
 \item{phi_prior}{The mean parameter of the exponential prior on
 phi, which determines the dispersion of the beta distribution. The
 default is .1, which equals a mean of 10 and is thus weakly
-informativce. If the response has very low variance (i.e. tightly)
-clusters around a specific value, then increasing this prior may be
+informative on the interval (0.4, 30). If the response has very low variance (i.e. tightly)
+clusters around a specific value, then decreasing this prior (and increasing the expected value)
+may be
 helpful. Checking the value of phi in the output of the model command
-will reveal if 10 is too small.}
+will reveal if a value of 0.1 (mean of 10) is too small.}
 
 \item{dirichlet_prior}{A vector of three integers
 corresponding to the prior parameters for the dirchlet distribution
@@ -72,14 +80,14 @@ Default is 0.}
 regression coefficients for predicting phi, the dispersion parameter.
 Only useful if a linear model is being fit to phi.
 Default is 5, which makes the prior weakly informative on the
-logit scale.}
+exponential scale.}
 
 \item{extra_prior}{An additional prior, such as a prior for a specific
 regression coefficient, added to the model by passing one of the \code{brms}
 functions \link[brms:set_prior]{brms::set_prior} or \link[brms:set_prior]{brms::prior_string} with appropriate
 values.}
 
-\item{inits}{This parameter is used to determine starting values for
+\item{init}{This parameter is used to determine starting values for
 the Stan sampler to begin Markov Chain Monte Carlo sampling. It is
 set by default at 0 because the non-linear nature of beta regression
 means that it is possible to begin with extreme values depending on the
@@ -89,6 +97,8 @@ convergence issues with Rhat statistics. If that is a concern, such as
 with an experimental feature of \code{brms}, set this to \code{"random"} to get
 more robust starting values (just be sure to scale the covariates so they are
 not too large in absolute size).}
+
+\item{inits}{Alias of \code{init}. Overrides \code{init} when not NULL.}
 
 \item{...}{All other arguments passed on to the \code{brm} function}
 }
@@ -117,6 +127,8 @@ regression model is currently not available in \code{brms} natively, this modeli
 function allows a \code{brms} model to be fit with the ordered beta regression
 distribution.
 
+For more information about the model, see the paper here: https://osf.io/preprints/socarxiv/2sx6y/.
+
 This function allows you to set priors on the dispersion parameter,
 the cutpoints, and the regression coefficients (see below for options).
 However, to add specific priors on individual covariates, you would need
@@ -136,7 +148,7 @@ this paper: https://osf.io/preprints/socarxiv/2sx6y/
 
 To cite the package, please cite the following paper:
 
-Kubinec, Robert. "Ordered Beta Regression: A Parsimonious, Well-Fitting Model for Continuous Data with Lower and Upper Bounds." \strong{Political Analysis}. 2022. Forthcoming.
+Kubinec, Robert. "Ordered Beta Regression: A Parsimonious, Well-Fitting Model for Continuous Data with Lower and Upper Bounds." \strong{Political Analysis}. 2022.
 }
 \examples{
 # load survey data that comes with the package

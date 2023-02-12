@@ -1,7 +1,7 @@
 Package: ordbetareg
 Type: Package
 Title: Ordered Beta Regression Models with Brms
-Version: 0.5.0
+Version: 0.7.0
 Authors@R: person(
   "Robert", "Kubinec",
   email = "rmk7@nyu.edu",
@@ -16,14 +16,17 @@ BugReports: https://github.com/saudiwin/ordbetareg_pack/issues
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
+LazyDataCompression: xz
 RoxygenNote: 7.1.2
-Depends: R (>= 3.5), faux, dplyr, brms, tidyr, stats, ggplot2
-Suggests: rmarkdown, knitr, modelsummary, marginaleffects, haven,
-        stringr, Hmisc, collapse
+Depends: R (>= 3.5), brms (>= 2.18.0), stats
+Imports: transformr, faux, dplyr, ggplot2 (>= 3.4.0), gganimate, tidyr
+Suggests: rmarkdown, knitr, modelsummary, marginaleffects (>= 0.9.0),
+        haven, stringr, Hmisc, collapse, ggthemes, glmmTMB, mice,
+        bayestestR
 VignetteBuilder: knitr
 NeedsCompilation: no
-Packaged: 2022-10-25 04:44:51 UTC; rmk7
+Packaged: 2023-02-12 10:24:16 UTC; rmk7
 Author: Robert Kubinec [aut, cre] (<https://orcid.org/0000-0001-6655-4119>)
 Maintainer: Robert Kubinec <rmk7@nyu.edu>
 Repository: CRAN
-Date/Publication: 2022-10-25 05:22:36 UTC
+Date/Publication: 2023-02-12 11:30:02 UTC

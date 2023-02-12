@@ -1,13 +1,3 @@
-## ---- include = FALSE---------------------------------------------------------
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>",
-  fig.align="center",
-  fig.width=5,
-  fig.height=3
-)
-options(rmarkdown.html_vignette.check_title = FALSE)
-
 ## ----setup, include = FALSE---------------------------------------------------
 
 library(ordbetareg)
@@ -18,11 +8,25 @@ library(brms)
 library(tidyr)
 library(stringr)
 library(Hmisc)
+library(glmmTMB)
+library(modelsummary)
+library(marginaleffects)
 
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>"
 )
+
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.align="center",
+  fig.width=7,
+  fig.height=3
+)
+options(rmarkdown.html_vignette.check_title = FALSE)
+
+set.seed(628871)
 
 
 ## ----runmod-------------------------------------------------------------------
@@ -75,11 +79,12 @@ if(run_model) {
   ord_fit_mean <- ordbetareg(formula=therm ~ mo(education)*mo(income) +
                                (1|region), 
                        data=model_data,
-                cores=2,chains=2,iter=1000,
+                       control=list(adapt_delta=0.95),
+                cores=1,chains=1,iter=500,
                 refresh=0)
                 # NOTE: to do parallel processing within chains
                 # add the options below
-                #threads=threading(5),
+                #threads=5,
                 #backend="cmdstanr"
                 #where threads is the number of cores per chain
                 # you must have cmdstanr set up to do so
@@ -115,10 +120,25 @@ pew %>%
 
 ## ----post_predict,message=F---------------------------------------------------
 
-plots <- pp_check_ordbeta(ord_fit_mean,ndraws=100)
+# new theme option will add in new ggplot2 themes or themes
+# from other packages
+
+plots <- pp_check_ordbeta(ord_fit_mean,
+                          ndraws=100,
+                          outcome_label="Thermometer Rating",
+                          new_theme=ggthemes::theme_economist())
 
 plots$discrete
 plots$continuous
+
+
+## ----animate------------------------------------------------------------------
+
+plot2 <- pp_check_ordbeta(ord_fit_mean, animate=TRUE,
+                          outcome_label="Thermometer Rating",
+                          new_theme=ggthemes::theme_economist())
+
+plot2$continuous
 
 
 ## ----coef_plot----------------------------------------------------------------
@@ -134,22 +154,150 @@ modelsummary(ord_fit_mean,statistic = "conf.int",
 
 ## ----marg_effect--------------------------------------------------------------
 
+avg_slopes(ord_fit_mean, variables="education") %>%
+  select(Variable="term",
+         Level="contrast",
+         `5% Quantile`="conf.low",
+         `Posterior Mean`="estimate",
+         `95% Quantile`="conf.high") %>% 
+  knitr::kable(caption = "Marginal Effect of Education on Professor Thermometer",
+               format.args=list(digits=2),
+               align=c('llccc'))
+
+## ----marg_effect_rescale,warning=FALSE----------------------------------------
 library(marginaleffects)
 
-marg_effs <- marginaleffects(ord_fit_mean)
+avg_slopes(ord_fit_mean, variables="education",
+           transform=function(x) x*100) %>%
+  select(Variable="term",
+         Level="contrast",
+         `5% Quantile`="conf.low",
+         `Posterior Mean`="estimate",
+         `95% Quantile`="conf.high") %>% 
+  knitr::kable(caption = "Marginal Effect of Education on Professor Thermometer",
+               format.args=list(digits=2),
+               align=c('llccc'))
 
-summary(marg_effs) %>% knitr::kable()
+## ----fit_tmb------------------------------------------------------------------
+
+# need to normalize first to 0 and 1
+
+model_data$therm_norm <- (model_data$therm - min(model_data$therm))/(max(model_data$therm) - min(model_data$therm))
+
+# fit requires specification of priors on cutpoints (labeled as psi)
+# will not be required in future versions of glmmTMB
+
+glmm_tmb_fit <- glmmTMB(therm_norm ~ approval + (1|region),
+                        data=model_data,
+                        family=ordbeta(),
+                        start=list(psi = c(-1, 1)))
+
+modelsummary(glmm_tmb_fit)
+
+# marginaleffects doesn't support default calculation for 
+# standard errors for this model, so we need to 
+# use a different method to derive uncertainty for
+# marginal effects on the [0,1] scale
+
+# code here is commented out because it will take a while 
+# to run, but it does work
+
+# avg_slopes(glmm_tmb_fit,vcov = FALSE) %>% inferences(method="boot")
+
+
+## ----mult_impute--------------------------------------------------------------
+
+# simplify things by using one covariate within the [0,1] interval
+
+X <- runif(n = 100,0,1)
+outcome <- rordbeta(n=100,mu = 0.3 * X, phi =3, cutpoints=c(-2,2))
+
+# set 10% of values of X randomly to NA
+
+X[runif(n=100)<0.1] <- NA
+
+# create a list of two imputed datasets with package mice
+
+mult_impute <- mice::mice(data=tibble(outcome=outcome,
+                                      X=X),m=2,printFlag = FALSE) %>% 
+  mice::complete(action="all")
+
+# pass list to the data argument and set use_brm_multiple to TRUE
+
+if(run_model) {
+  
+  fit_imputed <- ordbetareg(formula = outcome ~ X,
+                            data=mult_impute,
+                            use_brm_multiple = T,
+                                 cores=1,chains=1, iter=500)
+  
+} else {
+  
+  data('fit_imputed')
+  
+}
+
+# all functions now work as though the model had only one dataset
+# imputation uncertainty included in all results/analyses
+# marginal effects, though, only incorporate one imputed dataset
+
+modelsummary(fit_imputed,statistic = 'conf.int')
+avg_slopes(fit_imputed)
+
+## ----mult_variate-------------------------------------------------------------
+
+  # generate a new Gaussian/Normal outcome with same predictor X and mediator
+  # Z
+
+  X <- runif(n = 100,0,1)
+
+  Z <- rnorm(100, mean=3*X)
+  
+  # use logit function to map unbounded continuous data to [0,1] interval
+  # X is mediated by Z
+
+  outcome <- rordbeta(n=100, mu = plogis(.4 * X + 1.5 * Z))
+  
+
+  # use the bf function from brms to specify two formulas/responses
+  # set_rescor must be FALSE as one distribution is not Gaussian (ordered beta)
+  
+  # OLS for mediator
+  mod1 <- bf(Z ~ X,family = gaussian)
+  # ordered beta
+  mod2 <- bf(outcome ~ X + Z)
+
+if(run_model) {
+  
+  fit_multivariate <- ordbetareg(formula=mod1 + mod2 + set_rescor(FALSE),
+                                 data=tibble(outcome=outcome,
+                                             X=X,Z=Z),
+                                 cores=1,chains=1, iter=500)
+  
+}
+  
+  modelsummary(fit_multivariate,statistic = "conf.int")
+  
+  # need to calculate each sub-model's marginal effects separately
+  
+  avg_slopes(fit_multivariate,resp="outcome")
+  avg_slopes(fit_multivariate, resp="Z")
+
+
+## ----mediation----------------------------------------------------------------
+
+bayestestR::mediation(fit_multivariate)
 
 
 ## ----run_brms_phi-------------------------------------------------------------
 
 if(run_model) {
   
-  ord_fit_phi <- ordbetareg(bf(therm ~ 0, 
+  ord_fit_phi <- ordbetareg(bf(therm ~ 1, 
                 phi ~ age + sex),
                 phi_reg = T,
                 data=model_data,
-                cores=2,chains=2,iter=1000,
+                cores=2,chains=2,iter=500,
                 refresh=0)
                 # NOTE: to do parallel processing within chains
                 # add the options below
@@ -192,7 +340,7 @@ pred_post <- posterior_predict(ord_fit_phi,
 # better with iterations as rows
 
 pred_post <- t(pred_post)
-colnames(pred_post) <- 1:1000
+colnames(pred_post) <- 1:ncol(pred_post)
 
 # need to convert to a data frame
 
@@ -203,7 +351,8 @@ data_pred <- as_tibble(pred_post) %>%
 
 data_pred %>% 
   ggplot(aes(x=estimate)) +
-  geom_density(alpha=0.5,aes(fill=sex)) +
+  geom_density(aes(fill=sex),alpha=0.5,colour=NA) +
+  scale_fill_viridis_d() +
   theme(panel.background = element_blank(),
         panel.grid=element_blank())
 

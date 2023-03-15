@@ -9,17 +9,17 @@ library(tidyr)
 library(stringr)
 library(Hmisc)
 library(glmmTMB)
-library(modelsummary)
+#library(modelsummary)
 library(marginaleffects)
 
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>"
-)
 
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>",
+  warn=FALSE
+)
+
+knitr::opts_chunk$set(
   fig.align="center",
   fig.width=7,
   fig.height=3
@@ -143,32 +143,22 @@ plot2$continuous
 
 ## ----coef_plot----------------------------------------------------------------
 
-library(modelsummary)
+#library(modelsummary)
 
-modelsummary(ord_fit_mean,statistic = "conf.int",
-                          metrics = "RMSE",
-                          coef_map=c("b_Intercept"="Intercept",
-                                     "bsp_moeducation"="Education",
-                                     "bsp_moincome"="Income",
-                                     "bsp_moeducation:moincome"="EducationXIncome"))
+# code fails on CRAN, but works everywhere else
+
+# modelsummary(ord_fit_mean,statistic = "conf.int",
+#              metrics = "RMSE",
+#              coef_map=c("b_Intercept"="Intercept",
+#                         "bsp_moeducation"="Education",
+#                         "bsp_moincome"="Income",
+#                         "bsp_moeducation:moincome"="EducationXIncome"))
+
+knitr::include_graphics("model_sum.png")
 
 ## ----marg_effect--------------------------------------------------------------
 
 avg_slopes(ord_fit_mean, variables="education") %>%
-  select(Variable="term",
-         Level="contrast",
-         `5% Quantile`="conf.low",
-         `Posterior Mean`="estimate",
-         `95% Quantile`="conf.high") %>% 
-  knitr::kable(caption = "Marginal Effect of Education on Professor Thermometer",
-               format.args=list(digits=2),
-               align=c('llccc'))
-
-## ----marg_effect_rescale,warning=FALSE----------------------------------------
-library(marginaleffects)
-
-avg_slopes(ord_fit_mean, variables="education",
-           transform=function(x) x*100) %>%
   select(Variable="term",
          Level="contrast",
          `5% Quantile`="conf.low",
@@ -192,17 +182,10 @@ glmm_tmb_fit <- glmmTMB(therm_norm ~ approval + (1|region),
                         family=ordbeta(),
                         start=list(psi = c(-1, 1)))
 
-modelsummary(glmm_tmb_fit)
-
-# marginaleffects doesn't support default calculation for 
-# standard errors for this model, so we need to 
-# use a different method to derive uncertainty for
-# marginal effects on the [0,1] scale
-
-# code here is commented out because it will take a while 
-# to run, but it does work
-
-# avg_slopes(glmm_tmb_fit,vcov = FALSE) %>% inferences(method="boot")
+# model coefficients
+# modelsummary(glmm_tmb_fit)
+# marginal effects in scale of the outcome
+avg_slopes(glmm_tmb_fit)
 
 
 ## ----mult_impute--------------------------------------------------------------
@@ -229,7 +212,7 @@ if(run_model) {
   fit_imputed <- ordbetareg(formula = outcome ~ X,
                             data=mult_impute,
                             use_brm_multiple = T,
-                                 cores=1,chains=1, iter=500)
+                            cores=1,chains=1, iter=500)
   
 } else {
   
@@ -241,31 +224,31 @@ if(run_model) {
 # imputation uncertainty included in all results/analyses
 # marginal effects, though, only incorporate one imputed dataset
 
-modelsummary(fit_imputed,statistic = 'conf.int')
+#modelsummary(fit_imputed,statistic = 'conf.int')
 avg_slopes(fit_imputed)
 
 ## ----mult_variate-------------------------------------------------------------
 
-  # generate a new Gaussian/Normal outcome with same predictor X and mediator
-  # Z
+# generate a new Gaussian/Normal outcome with same predictor X and mediator
+# Z
 
-  X <- runif(n = 100,0,1)
+X <- runif(n = 100,0,1)
 
-  Z <- rnorm(100, mean=3*X)
-  
-  # use logit function to map unbounded continuous data to [0,1] interval
-  # X is mediated by Z
+Z <- rnorm(100, mean=3*X)
 
-  outcome <- rordbeta(n=100, mu = plogis(.4 * X + 1.5 * Z))
-  
+# use logit function to map unbounded continuous data to [0,1] interval
+# X is mediated by Z
 
-  # use the bf function from brms to specify two formulas/responses
-  # set_rescor must be FALSE as one distribution is not Gaussian (ordered beta)
-  
-  # OLS for mediator
-  mod1 <- bf(Z ~ X,family = gaussian)
-  # ordered beta
-  mod2 <- bf(outcome ~ X + Z)
+outcome <- rordbeta(n=100, mu = plogis(.4 * X + 1.5 * Z))
+
+
+# use the bf function from brms to specify two formulas/responses
+# set_rescor must be FALSE as one distribution is not Gaussian (ordered beta)
+
+# OLS for mediator
+mod1 <- bf(Z ~ X,family = gaussian)
+# ordered beta
+mod2 <- bf(outcome ~ X + Z)
 
 if(run_model) {
   
@@ -275,13 +258,13 @@ if(run_model) {
                                  cores=1,chains=1, iter=500)
   
 }
-  
-  modelsummary(fit_multivariate,statistic = "conf.int")
-  
-  # need to calculate each sub-model's marginal effects separately
-  
-  avg_slopes(fit_multivariate,resp="outcome")
-  avg_slopes(fit_multivariate, resp="Z")
+
+#modelsummary(fit_multivariate,statistic = "conf.int")
+
+# need to calculate each sub-model's marginal effects separately
+
+avg_slopes(fit_multivariate,resp="outcome")
+avg_slopes(fit_multivariate, resp="Z")
 
 
 ## ----mediation----------------------------------------------------------------
@@ -294,18 +277,18 @@ bayestestR::mediation(fit_multivariate)
 if(run_model) {
   
   ord_fit_phi <- ordbetareg(bf(therm ~ 1, 
-                phi ~ age + sex),
-                phi_reg = T,
-                data=model_data,
-                cores=2,chains=2,iter=500,
-                refresh=0)
-                # NOTE: to do parallel processing within chains
-                # add the options below
-                #threads=threading(5),
-                #backend="cmdstanr"
-                #where threads is the number of cores per chain
-                # you must have cmdstanr set up to do so
-                # see https://mc-stan.org/cmdstanr/
+                               phi ~ age + sex),
+                            phi_reg = T,
+                            data=model_data,
+                            cores=2,chains=2,iter=500,
+                            refresh=0)
+  # NOTE: to do parallel processing within chains
+  # add the options below
+  #threads=threading(5),
+  #backend="cmdstanr"
+  #where threads is the number of cores per chain
+  # you must have cmdstanr set up to do so
+  # see https://mc-stan.org/cmdstanr/
   
 } else {
   
@@ -361,8 +344,8 @@ data_pred %>%
 #  
 #  # NOT RUN IN THE VIGNETTE
 #  
-#    single_data <- sim_ordbeta(N=100,iter=1,
-#                               return_data=T)
+#  single_data <- sim_ordbeta(N=100,iter=1,
+#                             return_data=T)
 #  
 #  # examine the first dataset
 #  

@@ -54,6 +54,7 @@
 #' @importFrom dplyr select
 #' @importFrom utils packageVersion
 #' @importFrom gganimate transition_time ease_aes
+#' @importFrom transformr poly_star
 pp_check_ordbeta <- function(model=NULL,
                              type="both",
                              ndraws=10,
@@ -83,6 +84,8 @@ pp_check_ordbeta <- function(model=NULL,
       outcome_label <- names(model$data)[1]
 
     }
+
+    this_star <- poly_star()
 
     if(reverse_bounds) {
 

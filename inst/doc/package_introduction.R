@@ -8,8 +8,7 @@ library(brms)
 library(tidyr)
 library(stringr)
 library(Hmisc)
-library(glmmTMB)
-#library(modelsummary)
+library(modelsummary)
 library(marginaleffects)
 
 
@@ -25,6 +24,8 @@ knitr::opts_chunk$set(
   fig.height=3
 )
 options(rmarkdown.html_vignette.check_title = FALSE)
+
+options(modelsummary_factory_default = "gt")
 
 set.seed(628871)
 
@@ -132,29 +133,17 @@ plots$discrete
 plots$continuous
 
 
-## ----animate------------------------------------------------------------------
-
-plot2 <- pp_check_ordbeta(ord_fit_mean, animate=TRUE,
-                          outcome_label="Thermometer Rating",
-                          new_theme=ggthemes::theme_economist())
-
-plot2$continuous
-
-
 ## ----coef_plot----------------------------------------------------------------
 
-#library(modelsummary)
+library(modelsummary)
 
-# code fails on CRAN, but works everywhere else
+modelsummary(ord_fit_mean,statistic = "conf.int",
+             metrics = "RMSE",
+             coef_map=c("b_Intercept"="Intercept",
+                        "bsp_moeducation"="Education",
+                        "bsp_moincome"="Income",
+                        "bsp_moeducation:moincome"="EducationXIncome"))
 
-# modelsummary(ord_fit_mean,statistic = "conf.int",
-#              metrics = "RMSE",
-#              coef_map=c("b_Intercept"="Intercept",
-#                         "bsp_moeducation"="Education",
-#                         "bsp_moincome"="Income",
-#                         "bsp_moeducation:moincome"="EducationXIncome"))
-
-knitr::include_graphics("model_sum.png")
 
 ## ----marg_effect--------------------------------------------------------------
 
@@ -167,26 +156,6 @@ avg_slopes(ord_fit_mean, variables="education") %>%
   knitr::kable(caption = "Marginal Effect of Education on Professor Thermometer",
                format.args=list(digits=2),
                align=c('llccc'))
-
-## ----fit_tmb------------------------------------------------------------------
-
-# need to normalize first to 0 and 1
-
-model_data$therm_norm <- (model_data$therm - min(model_data$therm))/(max(model_data$therm) - min(model_data$therm))
-
-# fit requires specification of priors on cutpoints (labeled as psi)
-# will not be required in future versions of glmmTMB
-
-glmm_tmb_fit <- glmmTMB(therm_norm ~ approval + (1|region),
-                        data=model_data,
-                        family=ordbeta(),
-                        start=list(psi = c(-1, 1)))
-
-# model coefficients
-# modelsummary(glmm_tmb_fit)
-# marginal effects in scale of the outcome
-avg_slopes(glmm_tmb_fit)
-
 
 ## ----mult_impute--------------------------------------------------------------
 
@@ -224,8 +193,10 @@ if(run_model) {
 # imputation uncertainty included in all results/analyses
 # marginal effects, though, only incorporate one imputed dataset
 
-#modelsummary(fit_imputed,statistic = 'conf.int')
-avg_slopes(fit_imputed)
+knitr::kable(avg_slopes(fit_imputed))
+
+modelsummary(fit_imputed,statistic = 'conf.int',metrics="all")
+
 
 ## ----mult_variate-------------------------------------------------------------
 
@@ -259,12 +230,13 @@ if(run_model) {
   
 }
 
-#modelsummary(fit_multivariate,statistic = "conf.int")
-
 # need to calculate each sub-model's marginal effects separately
 
-avg_slopes(fit_multivariate,resp="outcome")
-avg_slopes(fit_multivariate, resp="Z")
+knitr::kable(avg_slopes(fit_multivariate,resp="outcome"))
+knitr::kable(avg_slopes(fit_multivariate, resp="Z"))
+
+suppressWarnings(modelsummary(fit_multivariate,statistic = "conf.int",
+             metrics="none"))
 
 
 ## ----mediation----------------------------------------------------------------
@@ -278,7 +250,7 @@ if(run_model) {
   
   ord_fit_phi <- ordbetareg(bf(therm ~ 1, 
                                phi ~ age + sex),
-                            phi_reg = T,
+                            phi_reg = "only",
                             data=model_data,
                             cores=2,chains=2,iter=500,
                             refresh=0)

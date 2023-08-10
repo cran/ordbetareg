@@ -26,6 +26,22 @@
 #' lies in the \\[0,1\\] interval, as required by beta regression. For furthur
 #' information, see the documentation for the [normalize] function.
 #'
+#' Priors can be set on a variety of coefficients in the model, see
+#' the description of parameters `coef_prior_mean` and `intercept_prior_mean`,
+#' in addition to setting a custom prior with the `extra_prior` option.
+#' When setting priors on intercepts, it is important to note that
+#' by default, all intercepts in brms are centered (the means are
+#' subtracted from the data). As a result, a prior set on the default
+#' intercept will have a different interpretation than a traditional
+#' intercept (i.e. the value of the outcome when the covariates are
+#' all zero). To change this setting, use the [brms::bf()] function
+#' as a wrapper around the formula with the option `center=FALSE` to
+#' set priors on a traditional non-centered intercept.
+#'
+#' Note that while `brms` also supports adding `0 + Intercept` to the
+#' formula to address this issue, `ordbetareg` does not support this
+#' syntax. Instead, use `center=FALSE` as an option to [brms::bf()].
+#'
 #' @param formula Either an R formula in the form response/DV ~ var1 + var2
 #'   etc. *or* formula object as created/called by the `brms`
 #'   [brms::bf] function. *Please avoid using 0 or `Intercept` in the
@@ -43,7 +59,10 @@
 #'   the dispersion  parameter, phi, and/or for the response. If you are
 #'   including models for both, pass option 'both'. If you only have an
 #'   intercept for the outcome (i.e. a 1 in place of covariates), pass 'only'.
-#'   If no model for phi, the default, pass 'none'.
+#'   If you only have intercepts for phi (such as a varying intercepts/random effects)
+#'   model, pass the value "intercepts". To set priors on these intercepts,
+#'   use the `extra-prior` option with the [brms::set_prior] function (class="sd").
+#'   If no model of any kind for phi, the default, pass 'none'.
 #' @param coef_prior_mean The mean of the Normal distribution prior on the
 #'   regression coefficients (for predicting the mean of the response).
 #'   Default is 0.
@@ -55,7 +74,11 @@
 #' for the intercept. By default is NULL, which means the intercept
 #' receives the same prior as `coef_prior_mean`. To zero out the
 #' intercept, set this parameter to 0 and `coef_prior_SD` to a
-#' very small number (0.01 or smaller).
+#' very small number (0.01 or smaller). NOTE: the default intercept
+#' in `brms` is centered (mean-subtracted) by default. To use a
+#' traditional intercept, either add `0 + Intercept` to the
+#' formula or specify `center=FALSE` in the `bf` formula function for
+#' `brms`. See [brms::brmsformula()] for more info.
 #' @param intercept_prior_SD The SD of the Normal distribution prior
 #' for the intercept. By default is NULL, which means the intercept
 #' receives the same prior SD as `coef_prior_SD`.
@@ -108,8 +131,8 @@
 #'   with an experimental feature of `brms`, set this to `"random"` to get
 #'   more robust starting values (just be sure to scale the covariates so they are
 #'   not too large in absolute size).
-#' @param offset Specify a hard-coded offset for the model. Default is 0
-#' (no offset). Also consider putting an informative prior on the intercept instead.
+#' @param make_stancode If `TRUE`, will pass back the Stan code for the
+#' model as a character vector rather than fitting the model.
 #' @param ... All other arguments passed on to the `brm` function
 #' @return A `brms` object fitted with the ordered beta regression distribution.
 #' @examples
@@ -134,10 +157,16 @@
 #'   \donttest{
 #'   # fit the actual model
 #'
+#'   if(.Platform$OS.type!="windows") {
+#'
 #'     ord_fit_mean <- ordbetareg(formula=therm ~ education + income +
-#'     (1|region),
-#'     data=model_data,
-#'     cores=2,chains=2)
+#'       (1|region),
+#'       data=model_data,
+#'       cores=2,chains=2)
+#'
+#'   }
+#'
+#'
 #'   }
 #'
 #' # access values of the coefficients
@@ -163,19 +192,32 @@ ordbetareg <- function(formula=NULL,
                        phi_intercept_prior_SD=NULL,
                        extra_prior=NULL,
                        init ="0",
-                       offset=0,
+                       make_stancode=FALSE,
                        ...) {
-
-  if(!is.numeric(offset)) {
-
-    stop("If specifying an offset, it should be a number.")
-
-  }
-
 
   if(is.null(formula)) {
 
     stop("You must pass a formula to the formula argument.")
+
+  }
+
+  # determine whether to fit the model
+
+  if(make_stancode) {
+
+    fit_func <- make_stancode
+
+  } else {
+
+    if(use_brm_multiple) {
+
+      fit_func <- brm_multiple
+
+    } else {
+
+      fit_func <- brm
+
+    }
 
   }
 
@@ -423,6 +465,9 @@ ordbetareg <- function(formula=NULL,
 
 
 
+# Define model ------------------------------------------------------------
+
+
 
   ordbeta_mod <- .load_ordbetareg(beta_prior=c(coef_prior_mean,
                                                coef_prior_SD),
@@ -436,7 +481,8 @@ ordbetareg <- function(formula=NULL,
                                   phi_reg=phi_reg,
                                   phi_prior=phi_prior,
                                   extra_prior=extra_prior,
-                                  suffix=suffix)
+                                  suffix=suffix,
+                                  formula=formula)
 
   if('mvbrmsformula' %in% class(formula)) {
     # update formula objects with model families if they
@@ -477,11 +523,13 @@ ordbetareg <- function(formula=NULL,
   }
 
 
+# Fit model ---------------------------------------------------------------
+
   if(use_brm_multiple) {
 
       if(sep_fam) {
 
-        out_obj <- brm_multiple(formula=formula, data=data,
+        out_obj <- fit_func(formula=formula, data=data,
                      stanvars=ordbeta_mod$stanvars,
                      prior=ordbeta_mod$priors,
                      init=init,
@@ -489,7 +537,7 @@ ordbetareg <- function(formula=NULL,
 
       } else {
 
-        out_obj <- brm_multiple(formula=formula, data=data,
+        out_obj <- fit_func(formula=formula, data=data,
                      stanvars=ordbeta_mod$stanvars,
                      family=ordbeta_mod$family,
                      prior=ordbeta_mod$priors,
@@ -503,7 +551,7 @@ ordbetareg <- function(formula=NULL,
 
       if(sep_fam) {
 
-        out_obj <- brm(formula=formula, data=data,
+        out_obj <- fit_func(formula=formula, data=data,
             stanvars=ordbeta_mod$stanvars,
             prior=ordbeta_mod$priors,
             init=init,
@@ -512,7 +560,7 @@ ordbetareg <- function(formula=NULL,
 
       } else {
 
-        out_obj <- brm(formula=formula, data=data,
+        out_obj <- fit_func(formula=formula, data=data,
             stanvars=ordbeta_mod$stanvars,
             family=ordbeta_mod$family,
             prior=ordbeta_mod$priors,
@@ -528,15 +576,9 @@ ordbetareg <- function(formula=NULL,
 
     class(out_obj) <- c(class(out_obj),"ordbetareg")
 
-    if(use_brm_multiple) {
+    out_obj$upper_bound <- attr(data[[dv_pos]],'upper_bound')
+    out_obj$lower_bound <- attr(data[[dv_pos]],'lower_bound')
 
-
-    } else {
-
-      out_obj$upper_bound <- attr(data[[dv_pos]],'upper_bound')
-      out_obj$lower_bound <- attr(data[[dv_pos]],'lower_bound')
-
-    }
 
 
 
@@ -558,7 +600,8 @@ ordbetareg <- function(formula=NULL,
                              dirichlet_prior_num=NULL,
                              phi_prior=NULL,
                              extra_prior=NULL,
-                             suffix="") {
+                             suffix="",
+                             formula=NULL) {
 
   # custom family
 
@@ -780,6 +823,8 @@ ordbetareg <- function(formula=NULL,
   # which represent regression coefficients on the logit
   # scale
 
+# Set priors --------------------------------------------------------------
+
   if(length(suffix)>1) {
 
     # multiple outcomes
@@ -831,8 +876,7 @@ ordbetareg <- function(formula=NULL,
 
     } else if(phi_reg=='only') {
 
-      priors <- priors + set_prior(paste0("normal(",beta_prior[1],",",beta_prior[2],")"),class="b") +
-        set_prior(paste0("normal(",phireg_beta_prior[1],",",phireg_beta_prior[2],")"),class="b",dpar="phi")
+      priors <- priors + set_prior(paste0("normal(",phireg_beta_prior[1],",",phireg_beta_prior[2],")"),class="b",dpar="phi")
 
     }
 
@@ -848,18 +892,35 @@ ordbetareg <- function(formula=NULL,
 
   if(!is.null(intercept_prior)) {
 
-    priors <- priors + set_prior(paste0("normal(",intercept_prior[1],",",intercept_prior[2],")"),
-                                 coef="Intercept",class="b")
+    # different priors with/without centering
 
-    # priors <- priors + set_prior(constant(0),
-    #                              coef="Intercept",class="b")
+    if(attr(formula$formula, "center")) {
+
+      priors <- priors + set_prior(paste0("normal(",intercept_prior[1],",",intercept_prior[2],")"),
+                                   class="Intercept")
+
+    } else {
+
+      priors <- priors + set_prior(paste0("normal(",intercept_prior[1],",",intercept_prior[2],")"),
+                                   coef="Intercept",class="b")
+
+    }
 
   }
 
-  if(!is.null(phireg_intercept_prior) && phi_reg) {
+  if(!is.null(phireg_intercept_prior) && phi_reg %in% c("only","both")) {
 
-    priors<- priors + set_prior(paste0("normal(",phireg_intercept_prior[1],",",phireg_intercept_prior[2],")"),
+    if(attr(formula$formula, "center")) {
+
+        priors<- priors + set_prior(paste0("normal(",phireg_intercept_prior[1],",",phireg_intercept_prior[2],")"),
                                                class="Intercept",dpar="phi")
+    } else {
+
+      priors<- priors + set_prior(paste0("normal(",phireg_intercept_prior[1],",",phireg_intercept_prior[2],")"),
+                                  class="Intercept",
+                                  dpar="phi")
+
+    }
 
   }
 
@@ -954,12 +1015,17 @@ ordbetareg <- function(formula=NULL,
 #'
 #' # will take a while to run this
 #' \donttest{
+#'
+#'   if(.Platform$OS.type!="windows") {
+#'
 #'     sim_data <- sim_ordbeta(N=c(250,750),
 #'     k=1,
 #'     beta_coef = .5,
 #'     iter=5,cores=2,
 #'     beta_type="binary",
 #'     treat_assign=0.3)
+#'
+#'     }
 #'
 #' }
 #'

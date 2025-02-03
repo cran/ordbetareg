@@ -44,8 +44,7 @@
 #'
 #' @param formula Either an R formula in the form response/DV ~ var1 + var2
 #'   etc. *or* formula object as created/called by the `brms`
-#'   [brms::bf] function. *Please avoid using 0 or `Intercept` in the
-#'   formula definition.
+#'   [brms::bf] function.
 #' @param data An R data frame or tibble containing the variables in the formula
 #' @param true_bounds If the true bounds of the outcome/response
 #'   don't exist in the data, pass a length 2 numeric vector
@@ -121,6 +120,11 @@
 #'  regression coefficient, added to the outcome regression by passing one of the `brms`
 #'  functions [brms::set_prior] or [brms::prior_string] with appropriate
 #'  values.
+#' @param manual_prior If you want to set your own custom priors with `brms`,
+#' use this option to pass any valid `brms` priors such as those created with
+#' [brms::set_prior] or [brms::prior_string]. Note that this option replaces
+#' any other priors set. Useful especially when doing something unorthodox
+#' like modeling cutpoints.
 #' @param init This parameter is used to determine starting values for
 #'   the Stan sampler to begin Markov Chain Monte Carlo sampling. It is
 #'   set by default at 0 because the non-linear nature of beta regression
@@ -131,7 +135,7 @@
 #'   with an experimental feature of `brms`, set this to `"random"` to get
 #'   more robust starting values (just be sure to scale the covariates so they are
 #'   not too large in absolute size).
-#' @param make_stancode If `TRUE`, will pass back the Stan code for the
+#' @param return_stancode If `TRUE`, will pass back the *only* the Stan code for the
 #' model as a character vector rather than fitting the model.
 #' @param ... All other arguments passed on to the `brm` function
 #' @return A `brms` object fitted with the ordered beta regression distribution.
@@ -173,7 +177,7 @@
 #'
 #' summary(ord_fit_mean)
 #' @importFrom brms brm brm_multiple
-#' @importFrom brms bf
+#' @importFrom brms bf make_stancode
 #' @export
 ordbetareg <- function(formula=NULL,
                        data=NULL,
@@ -191,8 +195,9 @@ ordbetareg <- function(formula=NULL,
                        phi_intercept_prior_mean=NULL,
                        phi_intercept_prior_SD=NULL,
                        extra_prior=NULL,
+                       manual_prior=NULL,
                        init ="0",
-                       make_stancode=FALSE,
+                       return_stancode=FALSE,
                        ...) {
 
   if(is.null(formula)) {
@@ -203,7 +208,7 @@ ordbetareg <- function(formula=NULL,
 
   # determine whether to fit the model
 
-  if(make_stancode) {
+  if(return_stancode) {
 
     fit_func <- make_stancode
 
@@ -482,7 +487,8 @@ ordbetareg <- function(formula=NULL,
                                   phi_prior=phi_prior,
                                   extra_prior=extra_prior,
                                   suffix=suffix,
-                                  formula=formula)
+                                  formula=formula,
+                                  manual_prior=manual_prior)
 
   if('mvbrmsformula' %in% class(formula)) {
     # update formula objects with model families if they
@@ -572,20 +578,110 @@ ordbetareg <- function(formula=NULL,
 
   }
 
+    # just return code
 
+    if(return_stancode) return(out_obj)
 
     class(out_obj) <- c(class(out_obj),"ordbetareg")
 
-    out_obj$upper_bound <- attr(data[[dv_pos]],'upper_bound')
-    out_obj$lower_bound <- attr(data[[dv_pos]],'lower_bound')
+    if(length(dv)==1 && ! use_brm_multiple) {
+
+      out_obj$upper_bound <- attr(data[[dv_pos]],'upper_bound')
+      out_obj$lower_bound <- attr(data[[dv_pos]],'lower_bound')
+
+    } else {
+
+      # multivariate adjustment necessary
+
+      if(use_brm_multiple) {
+
+        if(length(dv)==1) {
+
+          # one DV, multiple datasets
+
+          out_obj$upper_bound <- attr(data[[1]][[dv_pos]],'upper_bound')
+          out_obj$lower_bound <- attr(data[[1]][[dv_pos]],'lower_bound')
+
+
+        } else {
+
+          # multiple DVs, multiple datasets
+
+          out_obj$upper_bound <- lapply(dv_pos, function(c) {
+            return(attr(data[[1]][[c]], 'upper_bound'))
+          })
+
+          out_obj$lower_bound <- lapply(dv_pos, function(c) {
+            return(attr(data[[1]][[c]], 'lower_bound'))
+          })
+
+
+        }
+
+      } else {
+
+        # just multiple DVs, not multiple datasets
+
+        out_obj$upper_bound <- lapply(dv_pos, function(c) {
+          return(attr(data[[c]], 'upper_bound'))
+        })
+
+        out_obj$lower_bound <- lapply(dv_pos, function(c) {
+          return(attr(data[[c]], 'lower_bound'))
+        })
+
+      }
 
 
 
+    }
 
     return(out_obj)
 
 }
 
+
+#' Internal function for calculating expected values of
+#' Discrete end points of the scale
+#' @noRd
+.posterior_epred_ordbeta <- function(draws,component="all") {
+
+  cutzero <- brms::get_dpar(draws, "cutzero")
+  cutone <- brms::get_dpar(draws, "cutone")
+
+  mu <- brms::get_dpar(draws, "mu")
+
+  thresh1 <- cutzero
+  thresh2 <- cutzero + exp(cutone)
+
+  low <- 1 - plogis(mu - thresh1)
+  middle <- plogis(mu-thresh1) - plogis(mu - thresh2)
+  high <- plogis(mu - thresh2)
+
+  # return different measures depending on component of output desired
+  # expected value for entire distribution, expected value for
+  # continuous responses, expected value for low values (low end of scale),
+  # expected value for high values (top end of scale)
+
+  if(component=="all") {
+    return(low*0 + middle*plogis(mu) + high)
+  } else if(component=="bottom") {
+
+    return(low)
+
+  } else if(component=="continuous") {
+
+    return(middle)
+
+  } else if(component=="top") {
+
+    return(high)
+
+  }
+
+
+
+}
 
 #' Internal Function to Add Ordered Beta Regression Family
 #'
@@ -600,6 +696,7 @@ ordbetareg <- function(formula=NULL,
                              dirichlet_prior_num=NULL,
                              phi_prior=NULL,
                              extra_prior=NULL,
+                             manual_prior=NULL,
                              suffix="",
                              formula=NULL) {
 
@@ -607,7 +704,7 @@ ordbetareg <- function(formula=NULL,
 
   ord_beta_reg <- custom_family("ord_beta_reg",
                                 dpars=c("mu","phi","cutzero","cutone"),
-                                links=c("identity","log",NA,NA),
+                                links=c("identity","log","identity","identity"),
                                 lb=c(NA,0,NA,NA),
                                 type="real")
 
@@ -692,7 +789,7 @@ ordbetareg <- function(formula=NULL,
 
   # for calculating marginal effects/conditional expectations
 
-  posterior_epred_ord_beta_reg<- function(draws) {
+  posterior_epred_ord_beta_reg<- function(draws,component="all") {
 
     cutzero <- brms::get_dpar(draws, "cutzero")
     cutone <- brms::get_dpar(draws, "cutone")
@@ -706,7 +803,29 @@ ordbetareg <- function(formula=NULL,
     middle <- plogis(mu-thresh1) - plogis(mu - thresh2)
     high <- plogis(mu - thresh2)
 
-    low*0 + middle*plogis(mu) + high
+    # return different measures depending on type of output desired
+    # expected value for entire distribution, expected value for
+    # continuous responses, expected value for low values (low end of scale),
+    # expected value for high values (top end of scale)
+
+    if(component=="all") {
+      return(low*0 + middle*plogis(mu) + high)
+    } else if(component=="bottom") {
+
+      return(low)
+
+    } else if(component=="continuous") {
+
+      return(middle)
+
+    } else if(component=="top") {
+
+      return(high)
+
+    }
+
+
+
   }
 
   # for calcuating LOO and Bayes Factors
@@ -894,7 +1013,7 @@ ordbetareg <- function(formula=NULL,
 
     # different priors with/without centering
 
-    if(attr(formula$formula, "center")) {
+    if(is.null(attr(formula$formula, "center")) || attr(formula$formula, "center")) {
 
       priors <- priors + set_prior(paste0("normal(",intercept_prior[1],",",intercept_prior[2],")"),
                                    class="Intercept")
@@ -924,6 +1043,10 @@ ordbetareg <- function(formula=NULL,
 
   }
 
+  # for people who want to roll their own
+
+  if(!is.null(manual_prior)) priors <- manual_prior
+
   return(list(priors=priors,
               stanvars=stanvars,
               log_lik=log_lik_ord_beta_reg,
@@ -933,6 +1056,95 @@ ordbetareg <- function(formula=NULL,
 
 
 }
+
+# extract special information of families
+# @param x object from which to extract
+# @param y name of the component to extract
+family_info <- function(x, y, ...) {
+  UseMethod("family_info")
+}
+
+family_info.default <- function(x, y, ...) {
+  x <- as.character(x)
+  ulapply(x, .family_info, y = y, ...)
+}
+
+.family_info <- function(x, y, ...) {
+  x <- as_one_character(x)
+  y <- as_one_character(y)
+  if (y == "family") {
+    return(x)
+  }
+  if (!nzchar(x)) {
+    return(NULL)
+  }
+  info <- get(paste0(".family_", x))()
+  if (y == "link") {
+    out <- info$links[1]  # default link
+  } else {
+    info$links <- NULL
+    out <- info[[y]]
+  }
+  out
+}
+
+family_info.NULL <- function(x, y, ...) {
+  NULL
+}
+
+family_info.list <- function(x, y, ...) {
+  ulapply(x, family_info, y = y, ...)
+}
+
+family_info.family <- function(x, y, ...) {
+  family_info(x$family, y = y, ...)
+}
+
+family_info.brmsfamily <- function(x, y, ...) {
+  y <- as_one_character(y)
+  out <- x[[y]]
+  if (is.null(out)) {
+    # required for models fitted with brms 2.2 or earlier
+    out <- family_info(x$family, y = y, ...)
+  }
+  out
+}
+
+family_info.mixfamily <- function(x, y, ...) {
+  out <- lapply(x$mix, family_info, y = y, ...)
+  combine_family_info(out, y = y)
+}
+
+family_info.brmsformula <- function(x, y, ...) {
+  family_info(x$family, y = y, ...)
+}
+
+family_info.mvbrmsformula <- function(x, y, ...) {
+  out <- lapply(x$forms, family_info, y = y, ...)
+  combine_family_info(out, y = y)
+}
+
+family_info.brmsterms <- function(x, y, ...) {
+  family_info(x$family, y = y, ...)
+}
+
+family_info.mvbrmsterms <- function(x, y, ...) {
+  out <- lapply(x$terms, family_info, y = y, ...)
+  combine_family_info(out, y = y)
+}
+
+family_info.btl <- function(x, y, ...) {
+  family_info(x$family, y = y, ...)
+}
+
+family_info.btnl <- function(x, y, ...) {
+  family_info(x$family, y = y, ...)
+}
+
+family_info.brmsfit <- function(x, y, ...) {
+  family_info(x$formula, y = y, ...)
+}
+
 
 #' Helper function to add 0 + Intercept to function call
 #' @importFrom stats as.formula dbeta plogis qlogis quantile rbeta rnorm runif update var
@@ -1037,9 +1249,10 @@ ordbetareg <- function(formula=NULL,
 #'   summarize(mean_power=mean(power))
 #'
 #'
-#' @importFrom dplyr bind_rows mutate tibble slice as_tibble arrange group_by pull summarize %>% bind_cols
+#' @importFrom dplyr bind_rows mutate tibble slice as_tibble arrange group_by pull summarize %>% bind_cols lag
 #' @importFrom tidyr unchop
 #' @importFrom brms posterior_epred
+#' @importFrom stats median
 #' @export
 sim_ordbeta <- function(N=1000,k=5,
                         iter=1000,
@@ -1391,3 +1604,447 @@ sim_ordbeta <- function(N=1000,k=5,
   }
 
 }
+
+#' For use with the hacked brms epred function
+#' @noRd
+contains_draws <- function(x) {
+  if (!(is.brmsfit(x) && length(x$fit@sim))) {
+    stop2("The model does not contain posterior draws.")
+  }
+  invisible(TRUE)
+}
+
+#' @export
+posterior_epred_ordbeta <- function(object,...) {
+  UseMethod("posterior_epred_ordbeta")
+}
+
+get_predict.brmsfit <- function(model,
+                                newdata = insight::get_data(model),
+                                type = "response",
+                                ...) {
+
+  checkmate::assert_choice(type, choices = c("response", "link", "prediction", "average"))
+
+  if (type == "link") {
+    insight::check_if_installed("rstantools")
+    draws <- rstantools::posterior_linpred(
+      model,
+      newdata = newdata,
+      ...)
+  } else if (type == "response") {
+    insight::check_if_installed("rstantools")
+    draws <- ordbetareg::posterior_epred_ordbeta(
+      model,
+      newdata = newdata,
+      ...)
+  } else if (type == "prediction") {
+    insight::check_if_installed("rstantools")
+    draws <- rstantools::posterior_predict(
+      model,
+      newdata = newdata,
+      ...)
+  } else if (type == "average") {
+    insight::check_if_installed("brms")
+    draws <- brms::pp_average(
+      model,
+      newdata = newdata,
+      summary = FALSE,
+      ...)
+  }
+
+  if ("rowid_internal" %in% colnames(newdata)) {
+    idx <- newdata[["rowid_internal"]]
+  } else if ("rowid" %in% colnames(newdata)) {
+    idx <- newdata[["rowid"]]
+  } else {
+    idx <- seq_len(nrow(newdata))
+  }
+
+  # resp_subset sometimes causes dimension mismatch
+  if (length(dim(draws)) == 2 && nrow(newdata) != ncol(draws)) {
+    msg <- sprintf("Dimension mismatch: There are %s parameters in the posterior draws but %s observations in `newdata` (or the original dataset).",
+                   ncol(draws), nrow(newdata))
+    insight::format_error(msg)
+  }
+
+
+  # 1d outcome
+  if (length(dim(draws)) == 2) {
+    med <- collapse::dapply(draws, MARGIN = 2, FUN = collapse::fmedian)
+    out <- data.frame(
+      rowid = idx,
+      group = "main_marginaleffect",
+      estimate = med)
+
+    # multi-dimensional outcome
+  } else if (length(dim(draws)) == 3) {
+    out <- apply(draws, c(2, 3), stats::median)
+    levnames <- dimnames(draws)[[3]]
+    if (is.null(levnames)) {
+      colnames(out) <- seq_len(ncol(out))
+    } else {
+      colnames(out) <- levnames
+    }
+    out <- data.frame(
+      rowid = rep(idx, times = ncol(out)),
+      group = rep(colnames(out), each = nrow(out)),
+      estimate = c(out))
+    out$group <- group_to_factor(out$group, model)
+  } else {
+    stop("marginaleffects cannot extract posterior draws from this model. Please report this problem to the Bug tracker with a reporducible example: https://github.com/vincentarelbundock/marginaleffects/issues", call. = FALSE)
+  }
+
+  # group for multi-valued outcome
+  if (length(dim(draws)) == 3) {
+    draws <- lapply(1:dim(draws)[3], function(i) draws[, , i])
+    draws <- do.call("cbind", draws)
+  }
+  attr(out, "posterior_draws") <- t(draws)
+
+  return(out)
+}
+
+#' Calculate Probability of Response Components
+#'
+#' This function is an alternative to the `brms` default `posterior_epred`
+#' to allow for predictions of
+#' the probability of the bottom, top, or middle (i.e. continuous) parts
+#' of the response. Useful when wanting to understand what the effect of a covariate
+#' is on bottom or top values of the scale.
+#'
+#' To predict the top, bottom, or "middle" (i.e. continuous) components of the
+#' response, set the `component` argument to "top", "bottom" or "continuous". By
+#' default, `component` is set to "all", which will replicate behavior of the
+#' default `posterior_epred` function.
+#'
+#' All other arguments besides `component` are the same as the
+#' standard generic `posterior_predict`.
+#' For more information on the relevant arguments for `posterior_epred`,
+#' see [brms::posterior_epred].
+#'
+#' @param object An ordbetareg/brms object
+#' @param component The type of response component, i.e., the probability
+#' of the bottom end of the scale, the top end, or the middle (i.e.)
+#' continuous values.
+#' @param newdata see [brms::posterior_epred]
+#' @param re_formula see [brms::posterior_epred]
+#' @param re.form see [brms::posterior_epred]
+#' @param resp see [brms::posterior_epred]
+#' @param dpar see [brms::posterior_epred]
+#' @param nlpar see [brms::posterior_epred]
+#' @param ndraws see [brms::posterior_epred]
+#' @param draw_ids see [brms::posterior_epred]
+#' @param sort see [brms::posterior_epred]
+#' @param ... see [brms::posterior_epred]
+#'
+#' @return An S x N matrix where S is the number of posterior draws
+#' and N is the number of observations.
+#' @aliases posterior_epred_ordbeta
+#' @method posterior_epred_ordbeta brmsfit
+#' @importFrom abind abind
+#' @examples
+#'
+#' data('ord_fit_mean')
+#'
+#' # use function to calculate probability of top end of scale
+#'
+#' pr_1s <- posterior_epred_ordbeta(ord_fit_mean,component="top")
+#'
+#' # use function to calculate probability of bottom end of scale
+#'
+#' pr_0s <- posterior_epred_ordbeta(ord_fit_mean,component="top")
+#'
+#' # use function to calculate probability of continuous /
+#' # beta-distributed part of scale
+#'
+#' pr_beta <- posterior_epred_ordbeta(ord_fit_mean,component="top")
+#'
+#' @export
+posterior_epred_ordbeta.brmsfit <- function(object, component="all",
+                                            newdata = NULL, re_formula = NULL,
+                                            re.form = NULL, resp = NULL, dpar = NULL,
+                                            nlpar = NULL, ndraws = NULL, draw_ids = NULL,
+                                            sort = FALSE, ...) {
+
+  cl <- match.call()
+  if ("re.form" %in% names(cl) && !missing(re.form)) {
+    re_formula <- re.form
+  }
+  contains_draws(object)
+  object <- restructure(object)
+  prep <- prepare_predictions(object, newdata = newdata, re_formula = re_formula,
+                              resp = resp, ndraws = ndraws, draw_ids = draw_ids, check_response = FALSE,
+                              ...)
+  posterior_epred_ordbeta_prep(prep, dpar = dpar, nlpar = nlpar, sort = sort,
+                  scale = "response", summary = FALSE,
+                  component=component)
+
+
+
+}
+
+#' @noRd
+as_one_logical <- function(x, allow_na = FALSE) {
+  s <- substitute(x)
+  x <- as.logical(x)
+  if (length(x) != 1L || anyNA(x) && !allow_na) {
+    s <- deparse0(s, max_char = 100L)
+    stop2("Cannot coerce '", s, "' to a single logical value.")
+  }
+  x
+}
+
+# coerce 'x' to a single integer value
+#' @noRd
+as_one_integer <- function(x, allow_na = FALSE) {
+  s <- substitute(x)
+  x <- SW(as.integer(x))
+  if (length(x) != 1L || anyNA(x) && !allow_na) {
+    s <- deparse0(s, max_char = 100L)
+    stop2("Cannot coerce '", s, "' to a single integer value.")
+  }
+  x
+}
+
+# coerce 'x' to a single numeric value
+#' @noRd
+as_one_numeric <- function(x, allow_na = FALSE) {
+  s <- substitute(x)
+  x <- SW(as.numeric(x))
+  if (length(x) != 1L || anyNA(x) && !allow_na) {
+    s <- deparse0(s, max_char = 100L)
+    stop2("Cannot coerce '", s, "' to a single numeric value.")
+  }
+  x
+}
+
+# coerce 'x' to a single character string
+#' @noRd
+as_one_character <- function(x, allow_na = FALSE) {
+  s <- substitute(x)
+  x <- as.character(x)
+  if (length(x) != 1L || anyNA(x) && !allow_na) {
+    s <- deparse0(s, max_char = 100L)
+    stop2("Cannot coerce '", s, "' to a single character value.")
+  }
+  x
+}
+
+# coerce 'x' to a single character variable name
+#' @noRd
+as_one_variable <- function(x, allow_na = TRUE) {
+  x <- as_one_character(x)
+  if (x == "NA" && allow_na) {
+    return(x)
+  }
+  if (!nzchar(x) || !is_equal(x, all_vars(x))) {
+    stop2("Cannot coerce '", x, "' to a single variable name.")
+  }
+  x
+}
+
+#' @noRd
+stop2 <- function(...) {
+  stop(..., call. = FALSE)
+}
+
+# reorder observations to be in the initial user-defined order
+# currently only relevant for autocorrelation models
+# @param eta 'ndraws' x 'nobs' matrix or array
+# @param old_order optional vector to retrieve the initial data order
+# @param sort keep the new order as defined by the time-series?
+# @return the 'eta' matrix with possibly reordered columns
+#' @noRd
+reorder_obs <- function(eta, old_order = NULL, sort = FALSE) {
+  stopifnot(length(dim(eta)) %in% c(2L, 3L))
+  if (!length(old_order) || sort) {
+    return(eta)
+  }
+  stopifnot(length(old_order) == NCOL(eta))
+  p(eta, old_order, row = FALSE)
+}
+
+posterior_epred_ordbeta_prep <- function(object, dpar, nlpar, sort,
+                                     scale = "response", incl_thres = NULL,
+                                     summary = FALSE, robust = FALSE,
+                                     component=NULL,
+                                     probs = c(0.025, 0.975), ...) {
+
+  summary <- as_one_logical(summary)
+  dpars <- names(object$dpars)
+  nlpars <- names(object$nlpars)
+  if (length(dpar)) {
+    # predict a distributional parameter
+    dpar <- as_one_character(dpar)
+    if (!dpar %in% dpars) {
+      stop2("Invalid argument 'dpar'. Valid distributional ",
+            "parameters are: ", collapse_comma(dpars))
+    }
+    if (length(nlpar)) {
+      stop2("Cannot use 'dpar' and 'nlpar' at the same time.")
+    }
+    predicted <- is.bprepl(object$dpars[[dpar]]) ||
+      is.bprepnl(object$dpars[[dpar]])
+    if (predicted) {
+      # parameter varies across observations
+      if (scale == "linear") {
+        object$dpars[[dpar]]$family$link <- "identity"
+      }
+      if (is_ordinal(object$family)) {
+        object$dpars[[dpar]]$cs <- NULL
+        object$family <- object$dpars[[dpar]]$family <-
+          .dpar_family(link = object$dpars[[dpar]]$family$link)
+      }
+      if (dpar_class(dpar) == "theta" && scale == "response") {
+        ap_id <- as.numeric(dpar_id(dpar))
+        out <- get_theta(object)[, , ap_id, drop = FALSE]
+        dim(out) <- dim(out)[c(1, 2)]
+      } else {
+        out <- brms::get_dpar(object, dpar = dpar, inv_link = TRUE)
+      }
+    } else {
+      # parameter is constant across observations
+      out <- object$dpars[[dpar]]
+      out <- matrix(out, nrow = object$ndraws, ncol = object$nobs)
+    }
+  } else if (length(nlpar)) {
+    # predict a non-linear parameter
+    nlpar <- as_one_character(nlpar)
+    if (!nlpar %in% nlpars) {
+      stop2("Invalid argument 'nlpar'. Valid non-linear ",
+            "parameters are: ", collapse_comma(nlpars))
+    }
+    out <- get_nlpar(object, nlpar = nlpar)
+  } else {
+    # no dpar or nlpar specified
+    incl_thres <- as_one_logical(incl_thres %||% FALSE)
+    incl_thres <- incl_thres && is_ordinal(object$family) && scale == "linear"
+    if (incl_thres) {
+      # extract linear predictor array with thresholds etc. included
+      if (is.mixfamily(object$family)) {
+        stop2("'incl_thres' is not supported for mixture models.")
+      }
+      object$family$link <- "identity"
+    }
+    if (scale == "response" || incl_thres) {
+      # predict the mean of the response distribution
+      for (nlp in nlpars) {
+        object$nlpars[[nlp]] <- get_nlpar(object, nlpar = nlp)
+      }
+      for (dp in dpars) {
+        object$dpars[[dp]] <- brms::get_dpar(object, dpar = dp)
+      }
+      if (is_trunc(object)) {
+        out <- posterior_epred_trunc(object)
+      } else {
+
+        # use custom function for end points of scale
+        out <- .posterior_epred_ordbeta(object,component=component)
+      }
+    } else {
+      # return results on the linear scale
+      # extract all 'mu' parameters
+      if (conv_cats_dpars(object$family)) {
+        out <- dpars[grepl("^mu", dpars)]
+      } else {
+        out <- dpars[dpar_class(dpars) %in% "mu"]
+      }
+      if (length(out) == 1L) {
+        out <- brms::get_dpar(object, dpar = out, inv_link = FALSE)
+      } else {
+        # multiple mu parameters in categorical or mixture models
+        out <- lapply(out, get_dpar, prep = object, inv_link = FALSE)
+        out <- abind::abind(out, along = 3)
+      }
+    }
+  }
+  if (is.null(dim(out))) {
+    out <- as.matrix(out)
+  }
+  colnames(out) <- NULL
+  out <- reorder_obs(out, object$old_order, sort = sort)
+  if (scale == "response" && is_polytomous(object$family) &&
+      length(dim(out)) == 3L && dim(out)[3] == length(object$cats)) {
+    # for ordinal models with varying thresholds, dim[3] may not match cats
+    dimnames(out)[[3]] <- object$cats
+  }
+  if (summary) {
+    # only for compatibility with the 'fitted' method
+    out <- brms::posterior_summary(out, probs = probs, robust = robust)
+    if (is_polytomous(object$family) && length(dim(out)) == 3L) {
+      if (scale == "linear") {
+        dimnames(out)[[3]] <- paste0("eta", seq_dim(out, 3))
+      } else {
+        dimnames(out)[[3]] <- paste0("P(Y = ", dimnames(out)[[3]], ")")
+      }
+    }
+  }
+  out
+}
+
+#' @noRd
+is.brmsprep <- function(x) {
+inherits(x, "brmsprep")
+}
+
+is_categorical <- function(family) {
+  "categorical" %in% family_info(family, "specials")
+}
+
+is_ordinal <- function(family) {
+  "ordinal" %in% family_info(family, "specials")
+}
+
+is_multinomial <- function(family) {
+  "multinomial" %in% family_info(family, "specials")
+}
+
+is_logistic_normal <- function(family) {
+  "logistic_normal" %in% family_info(family, "specials")
+}
+
+is_simplex <- function(family) {
+  "simplex" %in% family_info(family, "specials")
+}
+
+is_polytomous <- function(family) {
+  is_categorical(family) || is_ordinal(family) ||
+    is_multinomial(family) || is_simplex(family)
+}
+
+#' @noRd
+is_trunc <- function(prep) {
+  stopifnot(is.brmsprep(prep))
+  any(prep$data[["lb"]] > -Inf) || any(prep$data[["ub"]] < Inf)
+}
+
+# get the mixing proportions of mixture models
+#' @noRd
+get_theta <- function(prep, i = NULL) {
+  stopifnot(is.brmsprep(prep))
+  if ("theta" %in% names(prep$dpars)) {
+    # theta was not predicted; no need to call get_dpar
+    theta <- prep$dpars$theta
+  } else {
+    # theta was predicted; apply softmax
+    mix_family <- prep$family
+    families <- family_names(mix_family)
+    theta <- vector("list", length(families))
+    for (j in seq_along(families)) {
+      prep$family <- mix_family$mix[[j]]
+      theta[[j]] <- as.matrix(get_dpar(prep, paste0("theta", j), i = i))
+    }
+    theta <- abind(theta, along = 3)
+    for (n in seq_len(dim(theta)[2])) {
+      theta[, n, ] <- softmax(slice(theta, 2, n))
+    }
+    if (length(i) == 1L) {
+      dim(theta) <- dim(theta)[c(1, 3)]
+    }
+  }
+  theta
+}
+
+
+

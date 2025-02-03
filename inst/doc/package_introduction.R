@@ -30,10 +30,20 @@ options(modelsummary_factory_default = "gt")
 set.seed(628871)
 
 
+
 ## ----runmod-------------------------------------------------------------------
 
 # whether to run models from scratch
 run_model <- F
+
+# number of iterations for sampling
+
+niters <- 200
+
+# number of warmup iterations
+
+nwarmup <- 100
+
 
 
 ## ----load_data----------------------------------------------------------------
@@ -50,6 +60,7 @@ pew %>%
   ylab("") +
   xlab("") +
   labs(caption=paste0("Figure shows the distribution of ",sum(!is.na(pew$therm))," non-missing survey responses."))
+
 
 
 ## ----munge_data---------------------------------------------------------------
@@ -73,6 +84,7 @@ model_data <- select(pew,therm,age="F_AGECAT_FINAL",
            income=ordered(income))
 
 
+
 ## ----run_ordbetareg-----------------------------------------------------------
 
 if(run_model) {
@@ -81,7 +93,7 @@ if(run_model) {
                                (1|region), 
                        data=model_data,
                        control=list(adapt_delta=0.95),
-                cores=1,chains=1,iter=500,
+                cores=1,chains=1,iter=niters,warmup=nwarmup,
                 refresh=0)
                 # NOTE: to do parallel processing within chains
                 # add the options below
@@ -96,6 +108,7 @@ if(run_model) {
   data("ord_fit_mean")
   
 }
+
 
 ## ----plot_cut-----------------------------------------------------------------
 
@@ -119,6 +132,7 @@ pew %>%
 
 
 
+
 ## ----post_predict,message=F---------------------------------------------------
 
 # new theme option will add in new ggplot2 themes or themes
@@ -133,6 +147,27 @@ plots$discrete
 plots$continuous
 
 
+
+## ----posterior_epred_ordbeta--------------------------------------------------
+
+# average probability of a respondent choosing either 0 or 100
+# i.e., the top and bottom components of the scale
+
+posterior_epred_ordbeta(ord_fit_mean,component = "top") %>% 
+  hist
+posterior_epred_ordbeta(ord_fit_mean,component = "bottom") %>% 
+  hist
+
+
+
+## ----plot_heiss---------------------------------------------------------------
+
+# turn off caption as it doesn't fit well in vignette mode
+
+plot_heiss(ord_fit_mean, grouping_fac="education", ndraws = 100,
+           plot_caption = "")
+
+
 ## ----coef_plot----------------------------------------------------------------
 
 library(modelsummary)
@@ -143,6 +178,7 @@ modelsummary(ord_fit_mean,statistic = "conf.int",
                         "bsp_moeducation"="Education",
                         "bsp_moincome"="Income",
                         "bsp_moeducation:moincome"="EducationXIncome"))
+
 
 
 ## ----marg_effect--------------------------------------------------------------
@@ -157,45 +193,7 @@ avg_slopes(ord_fit_mean, variables="education") %>%
                format.args=list(digits=2),
                align=c('llccc'))
 
-## ----mult_impute--------------------------------------------------------------
 
-# simplify things by using one covariate within the [0,1] interval
-
-X <- runif(n = 100,0,1)
-outcome <- rordbeta(n=100,mu = 0.3 * X, phi =3, cutpoints=c(-2,2))
-
-# set 10% of values of X randomly to NA
-
-X[runif(n=100)<0.1] <- NA
-
-# create a list of two imputed datasets with package mice
-
-mult_impute <- mice::mice(data=tibble(outcome=outcome,
-                                      X=X),m=2,printFlag = FALSE) %>% 
-  mice::complete(action="all")
-
-# pass list to the data argument and set use_brm_multiple to TRUE
-
-if(run_model) {
-  
-  fit_imputed <- ordbetareg(formula = outcome ~ X,
-                            data=mult_impute,
-                            use_brm_multiple = T,
-                            cores=1,chains=1, iter=500)
-  
-} else {
-  
-  data('fit_imputed')
-  
-}
-
-# all functions now work as though the model had only one dataset
-# imputation uncertainty included in all results/analyses
-# marginal effects, though, only incorporate one imputed dataset
-
-knitr::kable(avg_slopes(fit_imputed))
-
-modelsummary(fit_imputed,statistic = 'conf.int',metrics="all")
 
 
 ## ----mult_variate-------------------------------------------------------------
@@ -226,7 +224,7 @@ if(run_model) {
   fit_multivariate <- ordbetareg(formula=mod1 + mod2 + set_rescor(FALSE),
                                  data=tibble(outcome=outcome,
                                              X=X,Z=Z),
-                                 cores=1,chains=1, iter=500)
+                                 cores=1,chains=1, iter=niters,warmup=nwarmup)
   
 }
 
@@ -239,9 +237,11 @@ suppressWarnings(modelsummary(fit_multivariate,statistic = "conf.int",
              metrics="none"))
 
 
+
 ## ----mediation----------------------------------------------------------------
 
 bayestestR::mediation(fit_multivariate)
+
 
 
 ## ----run_brms_phi-------------------------------------------------------------
@@ -252,7 +252,7 @@ if(run_model) {
                                phi ~ age + sex),
                             phi_reg = "only",
                             data=model_data,
-                            cores=2,chains=2,iter=500,
+                            cores=2,chains=2,iter=niters,warmup=nwarmup,
                             refresh=0)
   # NOTE: to do parallel processing within chains
   # add the options below
@@ -270,9 +270,11 @@ if(run_model) {
 
 
 
+
 ## ----phicoef------------------------------------------------------------------
 
 summary(ord_fit_phi)
+
 
 
 ## ----plot_phi_sim-------------------------------------------------------------
@@ -312,17 +314,38 @@ data_pred %>%
         panel.grid=element_blank())
 
 
+
+## ----cutprior_model-----------------------------------------------------------
+#| eval: false
+
+## # we'll use our data, although we won't fit this model
+## 
+## cutpoint_mod <- ordbetareg(formula=bf(therm ~ education +
+##                                (1|region),
+##                                cutzero ~ education,
+##                                cutone ~ education),
+##                        data=model_data,
+##                        manual_prior=set_prior("normal(0,5)") +
+##                     set_prior("normal(0,5)", class="b",dpar="cutone") +
+##                     set_prior("normal(0,5)", class="b",dpar="cutzero"),
+##                        control=list(adapt_delta=0.95),
+##                 cores=1,chains=1,iter=500,
+##                 refresh=0)
+## 
+
+
 ## ----check_data,eval=FALSE----------------------------------------------------
-#  
-#  # NOT RUN IN THE VIGNETTE
-#  
-#  single_data <- sim_ordbeta(N=100,iter=1,
-#                             return_data=T)
-#  
-#  # examine the first dataset
-#  
-#  knitr::kable(head(single_data$data[[1]]))
-#  
+## 
+## # NOT RUN IN THE VIGNETTE
+## 
+## single_data <- sim_ordbeta(N=100,iter=1,
+##                            return_data=T)
+## 
+## # examine the first dataset
+## 
+## knitr::kable(head(single_data$data[[1]]))
+## 
+
 
 ## ----sim_data_full------------------------------------------------------------
 
@@ -340,6 +363,7 @@ if(run_model) {
   data("sim_data")
   
 }
+
 
 
 
@@ -364,4 +388,72 @@ sim_data %>%
   theme(plot.caption = element_text(size=7),
         axis.text.x=element_text(size=8))
 
+
+
+## -----------------------------------------------------------------------------
+
+library(DeclareDesign)
+
+# helper function for glmmTMB ordbetareg fit
+
+tidy_avg_slopes <- function(x) {
+  tidy(avg_slopes(x))
+}
+
+# first, a simulated proportion using rordbeta (ordered beta distribution)
+# see https://osf.io/preprints/socarxiv/2sx6y
+# cutpoints = number of observations at the bound (i.e. 0 or 1)
+# phi = dispersion, a value of 1 means relatively "flat"
+
+design_rordbeta <-
+  declare_model(
+    N = 100,
+    potential_outcomes(Y ~ rordbeta(N, mu = .5 + .05*Z,phi = 1,
+                                    cutpoints=c(-3,3)
+    ))
+  ) +
+  declare_inquiry(ATE = 0.05) +
+  declare_assignment(Z = complete_ra(N, m = 50)) +
+  declare_measurement(Y = reveal_outcomes(Y ~ Z)) +
+  declare_estimator(Y ~ Z, .method = glmmTMB::glmmTMB, inquiry = "ATE",
+                    family=glmmTMB::ordbeta,
+                    .summary= tidy_avg_slopes,
+                    term="Z")
+
+
+
+## ----eval=FALSE---------------------------------------------------------------
+## 
+## # create two designs with identical treatment effects/expected values
+## # first uses rordbeta to generate proportion in [0,1]
+## # second uses rordbeta to generate proportion in [0,1], then
+## # dichotomizes to 0 or 1 by rounding at 0.5
+## # compare to see which has greater power given same number of obsevations
+## # & check for bias
+## 
+## # equivalent to dichotomizing (if a proportion)
+## design_dichot <-
+##   declare_model(
+##     N = 100,
+##     potential_outcomes(Y ~ as.numeric(rordbeta(N, mu = .5 + .05*Z,phi = 1,
+##                                                cutpoints=c(-3,3))>0.5))
+##   ) +
+##   declare_inquiry(ATE = 0.05) +
+##   declare_assignment(Z = complete_ra(N, m = 50)) +
+##   declare_measurement(Y = reveal_outcomes(Y ~ Z)) +
+##   declare_estimator(Y ~ Z, .method = lm_robust, inquiry = "ATE")
+## 
+## # NB: DeclareDesign is using lm_robust as it's default estimation
+## # However, it should be unbiased for the mean/expected value for the
+## # binomial/dichotomized model
+## 
+## diagnosands <-
+##   declare_diagnosands(bias = mean(estimate - estimand),
+##                       power = mean(p.value <= 0.05))
+## 
+## # compare in terms of bias on the ATE & Power
+## 
+## diagnose_design(design_rordbeta, diagnosands = diagnosands)
+## diagnose_design(design_dichot, diagnosands = diagnosands)
+## 
 

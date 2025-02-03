@@ -1,3 +1,21 @@
+# ordbetareg v0.8
+
+- add `plot_heiss` function to examine how scale components change given levels of a factor
+- add `prior_manual` option to allow for a complete over-ride of priors in the model 
+(enables cutpoint modeling)
+- add `posterior_epred_ordbeta` function to allow for predicting the different 
+components of the scale (bottom, middle and top)
+- update vignette with sections on power analysis and modeling cutpoints
+- assorted bug fixes to multivariate/missing data modeling
+
+# ordbetareg v0.7.3.1
+
+- removed `transformr` from imports because of many dependencies
+- fixed bug if the intercept was specified and centered due to `brms` code change
+- fixed bug that prevented the `make_stancode` option from working. changed that option 
+to `return_stancode`
+- fixed `pp_check_ordbeta` for multivariate DVs
+
 # ordbetareg v0.7.2
 
 - `glmmTMB` no longer has standard errors from the `marginaleffects` package. Updated vignette to reflect this.
